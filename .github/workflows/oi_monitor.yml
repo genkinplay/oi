@@ -1,0 +1,43 @@
+name: OI Monitor
+
+on:
+  workflow_dispatch: # allow manual trigger
+
+# 添加并发控制
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      # Restore dedup state from previous run so we don't re-alert
+      # within the dedup window (default 1h). Cache key rotates daily
+      # so state resets cleanly each day.
+      - name: Restore dedup cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/oi_dedup.json
+          key: oi-dedup-${{ github.run_id }}
+          restore-keys: |
+            oi-dedup-
+
+      - name: Run OI Monitor
+        env:
+          WEBHOOK_URL: ${{ secrets.OI_WEBHOOK_URL }}
+          THRESHOLD_PCT: ${{ vars.OI_THRESHOLD_PCT || '10' }}
+          TOP_N: ${{ vars.OI_TOP_N || '50' }}
+          PERIOD: ${{ vars.OI_PERIOD || '5m' }}
+          DEDUP_WINDOW_SEC: ${{ vars.OI_DEDUP_WINDOW_SEC || '3600' }}
+          DEDUP_FILE: /tmp/oi_dedup.json
+        run: python scripts/oi_monitor.py
