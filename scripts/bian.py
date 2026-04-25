@@ -473,21 +473,11 @@ def write_output(
     linked: set[str],
     path: str = OUTPUT_PATH,
 ) -> None:
-    """以稳定排序的 JSON 写出，便于 GitHub Action diff。
-    刻意不包含时间戳，避免无意义提交。"""
-    all_symbols = sorted(direct | linked)
-    payload = {
-        "summary": {
-            "direct": len(direct),
-            "linked": len(linked),
-            "total": len(all_symbols),
-        },
-        "direct_contracts": sorted(direct),
-        "linked_contracts": sorted(linked),
-        "all_contracts": all_symbols,
-    }
+    """只写合并去重后的合约清单。
+    排序固定，刻意不带时间戳，避免 GitHub Action 产生空提交。"""
+    payload = {"all_contracts": sorted(direct | linked)}
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=False)
+        json.dump(payload, f, ensure_ascii=False, indent=2)
         f.write("\n")
 
 
