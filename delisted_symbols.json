@@ -1,0 +1,35 @@
+{
+  "summary": {
+    "direct": 8,
+    "linked": 3,
+    "total": 11
+  },
+  "direct_contracts": [
+    "AIUSDT",
+    "B3USDT",
+    "BOBUSDT",
+    "DAMUSDT",
+    "DEGENUSDT",
+    "IRUSDT",
+    "VINEUSDT",
+    "ZKJUSDT"
+  ],
+  "linked_contracts": [
+    "DEGOUSDT",
+    "DENTUSDT",
+    "TRUUSDT"
+  ],
+  "all_contracts": [
+    "AIUSDT",
+    "B3USDT",
+    "BOBUSDT",
+    "DAMUSDT",
+    "DEGENUSDT",
+    "DEGOUSDT",
+    "DENTUSDT",
+    "IRUSDT",
+    "TRUUSDT",
+    "VINEUSDT",
+    "ZKJUSDT"
+  ]
+}

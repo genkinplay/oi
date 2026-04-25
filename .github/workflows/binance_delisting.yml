@@ -1,0 +1,66 @@
+name: Binance Delisting Sync
+
+on:
+  schedule:
+    # 每 30 分钟运行一次（UTC，GitHub 在繁忙时段可能略有延迟）
+    - cron: "*/30 * * * *"
+  workflow_dispatch: # 允许手动触发
+
+permissions:
+  contents: write
+
+# 同一时间只允许一个实例在跑，避免连续触发抢推送
+concurrency:
+  group: binance-delisting-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # 取得能 push 回当前分支的 token
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install --upgrade requests
+
+      - name: Run Binance delisting scraper
+        run: python scripts/bian.py
+
+      - name: Commit & push if delisted_symbols.json changed
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- delisted_symbols.json; then
+            echo "✅ 无变更，跳过提交"
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add delisted_symbols.json
+          git commit -m "chore(binance): 同步下架合约标的（$(date -u +'%Y-%m-%d %H:%M UTC')）"
+
+          # 防止与并发推送冲突：先 rebase 再 push，最多重试 3 次
+          for i in 1 2 3; do
+            if git pull --rebase --autostash origin "${GITHUB_REF_NAME}" \
+               && git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              echo "🚀 已推送变更"
+              exit 0
+            fi
+            echo "↻ 推送冲突，重试 $i/3"
+            sleep 5
+          done
+          echo "❌ 重试 3 次仍无法推送" >&2
+          exit 1

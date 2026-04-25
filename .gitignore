@@ -21,11 +21,16 @@ env/
 .env.local
 .env.*.local
 
-# IDE
+# IDE / Editors
 .vscode/
 .idea/
 *.swp
 *.swo
+
+# AI tooling local state
+.claude/
+.cursor/
+.aider*
 
 # OS
 .DS_Store
