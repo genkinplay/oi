@@ -371,6 +371,8 @@ def main() -> None:
     dedup = load_dedup()
     text_alerts: list[str] = []
     md_alerts: list[str] = []
+    # signals = 过阈值 + 不在 dedup 窗口内的标的（含被币安过滤的）
+    signals: list[dict[str, Any]] = []
 
     for item in items[:3]:
         symbol = item.get("baseCoin")
@@ -391,10 +393,15 @@ def main() -> None:
         # 跟币安 fapi 的 <BASE>USDT 命名不一致，直接用 baseCoin 拼 USDT 永续。
         pair = f"{symbol.upper()}USDT"
 
-        # 币安永续不存在 → 跳过整条告警（不再通知）
+        # 币安永续不存在 → 记入 signals（被过滤），但不进入告警
         if not bm.is_perpetual_listed(pair):
             print(f"[oi_monitor] skip {pair}: 币安无此 USDT 永续合约")
+            signals.append(
+                {"pair": pair, "chg5": chg5, "passed": False, "reason": "币安无此 USDT 永续"}
+            )
             continue
+
+        signals.append({"pair": pair, "chg5": chg5, "passed": True, "reason": None})
 
         is_delisted = symbol.upper() in delisted_bases
 
@@ -429,9 +436,9 @@ def main() -> None:
         dedup[symbol] = time.time()
 
     save_dedup(dedup)
-    print(f"[oi_monitor] alerts: {len(text_alerts)}")
+    print(f"[oi_monitor] signals: {len(signals)} alerts: {len(text_alerts)}")
 
-    write_run_marker(text_alerts, top3)
+    write_run_marker(signals, text_alerts, top3)
 
     if not text_alerts:
         return
@@ -442,34 +449,46 @@ def main() -> None:
     notify_alerts(text_alerts, md_alerts)
 
 
-def write_run_marker(text_alerts: list[str], top3: list[str]) -> None:
+def write_run_marker(
+    signals: list[dict[str, Any]],
+    text_alerts: list[str],
+    top3: list[str],
+) -> None:
     """在 GitHub Actions 列表行打可见标记。
-    - 有告警 → 打 ::notice 注解（列表行右侧出现蓝色 ℹ️ + 数字）
-    - 同时写 step summary，进入运行详情页直接看到结论，不用翻 logs
+    - signal 数 = 过阈值且不在 dedup 窗口内的标的（含被币安过滤的）
+    - alert  数 = signal 中通过币安过滤、最终会推送的告警
+    用 ::notice 让列表行右侧出现蓝色 ℹ️ 标记；step summary 给详情页明细。
     """
-    pairs = [a.splitlines()[0] for a in text_alerts]
+    n_signals = len(signals)
+    n_alerts = len(text_alerts)
 
-    if text_alerts:
-        title = f"触发 {len(text_alerts)} 条告警"
-        # ::notice 单行，多个标的用逗号拼，列表 hover 能看到完整文本
-        print(f"::notice title={title}::{', '.join(pairs)}")
-    else:
-        # 没告警就发一条 notice 也可以，但会让"有 vs 没"的视觉差异消失。
-        # 这里特意不打注解 → 列表行干净 = 无告警
-        pass
+    if n_signals > 0:
+        title = f"信号 {n_signals} → 告警 {n_alerts}"
+        details = ", ".join(
+            (
+                f"{s['pair']} {s['chg5']:+.2f}%"
+                if s["passed"]
+                else f"{s['pair']} {s['chg5']:+.2f}% [过滤：{s['reason']}]"
+            )
+            for s in signals
+        )
+        print(f"::notice title={title}::{details}")
 
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_path:
         return
     try:
         with open(summary_path, "a", encoding="utf-8") as f:
-            if text_alerts:
-                f.write(f"## 触发 {len(text_alerts)} 条告警\n\n")
-                for line in pairs:
-                    f.write(f"- `{line}`\n")
+            if n_signals > 0:
+                f.write(f"## 信号 {n_signals} → 告警 {n_alerts}\n\n")
+                f.write("| 标的 | 5m 变动 | 状态 |\n")
+                f.write("| --- | --- | --- |\n")
+                for s in signals:
+                    status = "通过" if s["passed"] else f"过滤：{s['reason']}"
+                    f.write(f"| `{s['pair']}` | {s['chg5']:+.2f}% | {status} |\n")
                 f.write("\n")
             else:
-                f.write("## 本轮无满足阈值的告警\n\n")
+                f.write("## 本轮无满足阈值的信号\n\n")
             f.write(f"Top3 OI 5m 变动：{' ｜ '.join(top3)}\n")
     except OSError as exc:
         print(f"[oi_monitor] 写入 step summary 失败：{exc}")
