@@ -387,12 +387,13 @@ def main() -> None:
         chg5 = change_pct
         chg15 = (item.get("openInterestChM15") or 0) * 100
         price = item.get("price") or 0
-        # 候选合约名：item.symbol > {base}USDT
-        pair = (item.get("symbol") or f"{symbol}USDT").upper()
+        # coinank 返回的 item.symbol 经常是 <BASE>PERP 形式（如 1000NEIROCTOPERP），
+        # 跟币安 fapi 的 <BASE>USDT 命名不一致，直接用 baseCoin 拼 USDT 永续。
+        pair = f"{symbol.upper()}USDT"
 
         # 币安永续不存在 → 跳过整条告警（不再通知）
         if not bm.is_perpetual_listed(pair):
-            print(f"[oi_monitor] skip {pair}: 币安无此永续合约")
+            print(f"[oi_monitor] skip {pair}: 币安无此 USDT 永续合约")
             continue
 
         is_delisted = symbol.upper() in delisted_bases
