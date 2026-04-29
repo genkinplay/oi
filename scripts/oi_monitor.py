@@ -301,12 +301,8 @@ def _fmt_ai_block(ai: dict[str, Any]) -> tuple[str, str]:
         "red" if direction == "long" else ("green" if direction == "short" else "grey")
     )
 
-    position = ai.get("position") or "?"
-    position_cn = {"light": "轻仓", "heavy": "重仓"}.get(position, position)
-
     entry = ai.get("entry_price")
     sl = ai.get("stop_loss")
-    tp = ai.get("take_profit")
     conf = ai.get("confidence")
     reasoning = (ai.get("reasoning") or "").strip()
 
@@ -315,17 +311,17 @@ def _fmt_ai_block(ai: dict[str, Any]) -> tuple[str, str]:
         return _fmt_price(f) if f is not None else "—"
 
     text_lines = [
-        f"建议：{direction_cn} | {position_cn} | 置信度 {conf}",
-        f"介入：{_fmt_price_safe(entry)}  止损：{_fmt_price_safe(sl)}  止盈：{_fmt_price_safe(tp)}",
+        f"建议：{direction_cn}（轻仓）| 置信度 {conf}",
+        f"介入：{_fmt_price_safe(entry)}  止损：{_fmt_price_safe(sl)}",
     ]
     if reasoning:
         text_lines.append(f"理由：{reasoning}")
 
     md_lines = [
         f'> **建议** <font color="{direction_color}">**{direction_cn}**</font>'
-        f" ｜ {position_cn} ｜ 置信度 **{conf}**",
+        f"（轻仓）｜ 置信度 **{conf}**",
         f"> ",
-        f"> 介入 `{_fmt_price_safe(entry)}` 止损 `{_fmt_price_safe(sl)}` 止盈 `{_fmt_price_safe(tp)}`",
+        f"> 介入 `{_fmt_price_safe(entry)}`　止损 `{_fmt_price_safe(sl)}`",
     ]
     if reasoning:
         md_lines.append("> ")
