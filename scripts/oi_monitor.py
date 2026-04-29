@@ -431,6 +431,8 @@ def main() -> None:
     save_dedup(dedup)
     print(f"[oi_monitor] alerts: {len(text_alerts)}")
 
+    write_run_marker(text_alerts, top3)
+
     if not text_alerts:
         return
 
@@ -438,6 +440,39 @@ def main() -> None:
         print(f"[oi_monitor] ALERT {a}")
 
     notify_alerts(text_alerts, md_alerts)
+
+
+def write_run_marker(text_alerts: list[str], top3: list[str]) -> None:
+    """在 GitHub Actions 列表行打可见标记。
+    - 有告警 → 打 ::notice 注解（列表行右侧出现蓝色 ℹ️ + 数字）
+    - 同时写 step summary，进入运行详情页直接看到结论，不用翻 logs
+    """
+    pairs = [a.splitlines()[0] for a in text_alerts]
+
+    if text_alerts:
+        title = f"触发 {len(text_alerts)} 条告警"
+        # ::notice 单行，多个标的用逗号拼，列表 hover 能看到完整文本
+        print(f"::notice title={title}::{', '.join(pairs)}")
+    else:
+        # 没告警就发一条 notice 也可以，但会让"有 vs 没"的视觉差异消失。
+        # 这里特意不打注解 → 列表行干净 = 无告警
+        pass
+
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+    try:
+        with open(summary_path, "a", encoding="utf-8") as f:
+            if text_alerts:
+                f.write(f"## 触发 {len(text_alerts)} 条告警\n\n")
+                for line in pairs:
+                    f.write(f"- `{line}`\n")
+                f.write("\n")
+            else:
+                f.write("## 本轮无满足阈值的告警\n\n")
+            f.write(f"Top3 OI 5m 变动：{' ｜ '.join(top3)}\n")
+    except OSError as exc:
+        print(f"[oi_monitor] 写入 step summary 失败：{exc}")
 
 
 if __name__ == "__main__":
