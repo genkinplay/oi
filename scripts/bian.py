@@ -50,7 +50,7 @@ QUOTE_ASSETS: tuple[str, ...] = (
 
 SPOT_KEYWORDS: tuple[str, ...] = ("现货", "交易对", "Spot", "SPOT", "spot trading")
 FUTURES_KEYWORDS: tuple[str, ...] = (
-    "永续", "U 本位", "U本位", "币本位", "币 本位", "交割合约", "合约",
+    "永续", "U 本位", "U 本位", "币本位", "币 本位", "交割合约", "合约",
     "Futures", "Perpetual", "USDⓈ-M", "USDS-M", "USD-M", "COIN-M", "Coin-M",
     "Delivery Contract",
 )
@@ -63,7 +63,7 @@ TOKEN_DELIST_TITLE_RE = re.compile(
     r"(?i)\bbinance\s+(?:will\s+)?delist\s+[A-Z0-9,\s]+(?:on|as of|\.|$)"
 )
 
-# 基础币种白名单字符集：字母+数字，长度 2~15
+# 基础币种白名单字符集：字母 + 数字，长度 2~15
 _BASE_TOKEN = r"[A-Z0-9]{2,15}"
 _QUOTE_ALT = "|".join(QUOTE_ASSETS)
 # 使用 lookaround 替代 \b，规避 Python str regex 把中文当词字符的问题
@@ -152,10 +152,10 @@ def fetch_delisting_articles(
         try:
             data = _http_get(LIST_URL, params=params, timeout=10)
         except Exception as exc:
-            print(f"⚠️  列表第 {page} 页请求失败: {str(exc)[:120]}")
+            print(f"⚠️  列表第 {page} 页请求失败：{str(exc)[:120]}")
             break
 
-        # 返回结构: data.catalogs[0].articles
+        # 返回结构：data.catalogs[0].articles
         catalogs = data.get("data", {}).get("catalogs", []) or []
         page_articles: list[dict] = []
         for cat in catalogs:
@@ -233,7 +233,7 @@ def fetch_article_detail(code: str) -> ArticleDetail | None:
 def classify(title: str, content: str) -> str:
     """分类
     - futures:      合约下架（直接落为合约标的）
-    - token_delist: 币种级下架（该代币会从现货+合约整体摘牌，反查关联合约）
+    - token_delist: 币种级下架（该代币会从现货 + 合约整体摘牌，反查关联合约）
     - spot_pair:    单交易对下架（仅去掉 X/Y 这个特定报价对，不影响币种本身 → 不反查合约）
     - other:        保证金、Earn、无关公告
     """
@@ -328,7 +328,7 @@ def fetch_live_futures_symbols() -> set[str]:
         try:
             data = _http_get(url, timeout=15)
         except Exception as exc:
-            print(f"⚠️  获取 {label} 合约清单失败: {str(exc)[:120]}")
+            print(f"⚠️  获取 {label} 合约清单失败：{str(exc)[:120]}")
             continue
         for s in data.get("symbols", []) or []:
             status = s.get("status") or s.get("contractStatus")
@@ -413,7 +413,7 @@ def collect() -> tuple[set[str], set[str], list[ParsedArticle]]:
     print(f"📥 抓取最新 {len(articles)} 条下架公告")
 
     live_futures = fetch_live_futures_symbols()
-    print(f"📡 币安当前存量合约: {len(live_futures)}")
+    print(f"📡 币安当前存量合约：{len(live_futures)}")
 
     # 第一轮：抓全部详情，分类并收集 futures 公告里的直接合约（作为"已知合约"累积）
     raws: list[RawArticle] = []
@@ -485,8 +485,8 @@ def main() -> None:
     direct, linked, _ = collect()
     write_output(direct, linked)
     print("\n===== 汇总 =====")
-    print(f"🔻 直接合约下架: {len(direct)}")
-    print(f"🔗 现货关联合约: {len(linked)}")
+    print(f"🔻 直接合约下架：{len(direct)}")
+    print(f"🔗 现货关联合约：{len(linked)}")
     print(f"📦 合计（去重后）: {len(direct | linked)}")
     print(f"📝 已写入 {OUTPUT_PATH}")
 

@@ -38,9 +38,12 @@ jobs:
           WEBHOOK_URL: ${{ secrets.OI_WEBHOOK_URL }}
           FEISHU_WEBHOOK_URLS: ${{ secrets.FEISHU_WEBHOOK_URLS }}
           DINGTALK_WEBHOOK_URLS: ${{ secrets.DINGTALK_WEBHOOK_URLS }}
+          # DeepSeek（不配则跳过 AI 分析）
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-v4-pro' }}
           THRESHOLD_PCT: ${{ vars.OI_THRESHOLD_PCT || '10' }}
           TOP_N: ${{ vars.OI_TOP_N || '50' }}
           PERIOD: ${{ vars.OI_PERIOD || '5m' }}
-          DEDUP_WINDOW_SEC: ${{ vars.OI_DEDUP_WINDOW_SEC || '3600' }}
+          DEDUP_WINDOW_SEC: ${{ vars.OI_DEDUP_WINDOW_SEC || '1800' }}
           DEDUP_FILE: /tmp/oi_dedup.json
         run: python scripts/oi_monitor.py

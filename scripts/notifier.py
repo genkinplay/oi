@@ -74,7 +74,7 @@ def send_feishu(
     data = resp.json() if resp.content else {}
     code = data.get("code") if isinstance(data, dict) else None
     if code not in (0, None):
-        raise RuntimeError(f"飞书返回失败: {data}")
+        raise RuntimeError(f"飞书返回失败：{data}")
 
 
 def send_dingtalk(
@@ -95,7 +95,7 @@ def send_dingtalk(
     data = resp.json() if resp.content else {}
     err = data.get("errcode") if isinstance(data, dict) else None
     if err not in (0, None):
-        raise RuntimeError(f"钉钉返回失败: {data}")
+        raise RuntimeError(f"钉钉返回失败：{data}")
 
 
 def send_generic(

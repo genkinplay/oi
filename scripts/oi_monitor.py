@@ -7,6 +7,8 @@ Environment variables:
   WEBHOOK_URL             - 旧版通用 webhook（POST {title, content, task}）；多个用逗号分隔
   FEISHU_WEBHOOK_URLS     - 飞书自定义机器人 webhook 列表（逗号分隔）
   DINGTALK_WEBHOOK_URLS   - 钉钉自定义机器人 webhook 列表（逗号分隔）
+  DEEPSEEK_API_KEY        - DeepSeek API key（不配则跳过 AI 分析）
+  DEEPSEEK_MODEL          - DeepSeek 模型名（默认 deepseek-v4-pro，可选 deepseek-v4-flash）
   THRESHOLD_PCT           - Alert threshold in percent (default: 10)
   TOP_N                   - Number of symbols to monitor (default: 50)
   DEDUP_WINDOW_SEC        - Seconds before re-alerting same symbol (default: 3600)
@@ -21,18 +23,22 @@ import pathlib
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 # 让本脚本在任意 cwd 下都能 import 同目录下的 notifier 模块
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 CST = timezone(timedelta(hours=8))
 
+import binance_market as bm  # noqa: E402
+import indicators as ind  # noqa: E402
 import requests
+from ai_analyzer import analyze as ai_analyze  # noqa: E402
 from notifier import dispatch  # noqa: E402
 
 THRESHOLD_PCT = float(os.environ.get("THRESHOLD_PCT", "10"))
 TOP_N = int(os.environ.get("TOP_N", "50"))
-DEDUP_WINDOW_SEC = int(os.environ.get("DEDUP_WINDOW_SEC", "3600"))
+DEDUP_WINDOW_SEC = int(os.environ.get("DEDUP_WINDOW_SEC", "1800"))
 DEDUP_FILE = os.environ.get("DEDUP_FILE", "/tmp/oi_dedup.json")
 
 DELISTING_LIST_URL = os.environ.get(
@@ -120,7 +126,7 @@ def fetch_delisted_bases(timeout: int = 10) -> set[str]:
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:  # noqa: BLE001 - 容错，远端拉不到就跳过标签
-        print(f"[oi_monitor] 拉取下架清单失败，跳过标签注入: {exc}")
+        print(f"[oi_monitor] 拉取下架清单失败，跳过标签注入：{exc}")
         return set()
 
     contracts = data.get("all_contracts") or []
@@ -131,7 +137,7 @@ def fetch_delisted_bases(timeout: int = 10) -> set[str]:
         base = _extract_base(sym)
         if base:
             bases.add(base)
-    print(f"[oi_monitor] 下架清单: {len(contracts)} 合约 / {len(bases)} 币种")
+    print(f"[oi_monitor] 下架清单：{len(contracts)} 合约 / {len(bases)} 币种")
     return bases
 
 
@@ -157,7 +163,175 @@ def _color(pct: float) -> str:
 
 
 def _fmt_pct(pct: float) -> str:
-    return f"<font color=\"{_color(pct)}\">**{pct:+.2f}%**</font>"
+    return f'<font color="{_color(pct)}">**{pct:+.2f}%**</font>'
+
+
+def _kline_closes(klines: list[list]) -> list[float]:
+    return [float(k[4]) for k in klines if len(k) >= 5]
+
+
+def _kline_highs(klines: list[list]) -> list[float]:
+    return [float(k[2]) for k in klines if len(k) >= 5]
+
+
+def _kline_lows(klines: list[list]) -> list[float]:
+    return [float(k[3]) for k in klines if len(k) >= 5]
+
+
+def _safe_float(v: Any, default: float | None = None) -> float | None:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def build_market_snapshot(
+    pair: str, oi_chg5: float, oi_chg15: float
+) -> dict[str, Any] | None:
+    """采集币安多维行情数据，组装成给 AI 的快照。
+    pair 必须是币安存量合约（调用前由 is_perpetual_listed 校验过）。"""
+    snapshot: dict[str, Any] = {
+        "symbol": pair,
+        "oi_change": {
+            "5m_pct": round(oi_chg5, 4),
+            "15m_pct": round(oi_chg15, 4),
+        },
+        "unlock_info": "暂无解锁数据；如该标的近期有大额解锁压力，请自行核查",
+    }
+
+    t24 = bm.fetch_24h(pair)
+    if t24:
+        snapshot["ticker_24h"] = {
+            "last_price": _safe_float(t24.get("lastPrice")),
+            "price_change_pct": _safe_float(t24.get("priceChangePercent")),
+            "high": _safe_float(t24.get("highPrice")),
+            "low": _safe_float(t24.get("lowPrice")),
+            "volume_base": _safe_float(t24.get("volume")),
+            "volume_quote": _safe_float(t24.get("quoteVolume")),
+        }
+
+    pi = bm.fetch_premium_index(pair)
+    if pi:
+        next_funding_iso = None
+        nft = _safe_float(pi.get("nextFundingTime"))
+        if nft:
+            next_funding_iso = datetime.fromtimestamp(nft / 1000, CST).isoformat(
+                timespec="minutes"
+            )
+        snapshot["funding"] = {
+            "mark_price": _safe_float(pi.get("markPrice")),
+            "last_funding_rate_pct": (
+                round(_safe_float(pi.get("lastFundingRate"), 0) * 100, 4)
+                if pi.get("lastFundingRate") is not None
+                else None
+            ),
+            "next_funding_at_cst": next_funding_iso,
+        }
+
+    oi = bm.fetch_open_interest(pair)
+    if oi:
+        snapshot["open_interest"] = _safe_float(oi.get("openInterest"))
+
+    glsr = bm.fetch_long_short_ratio(pair, period="5m")
+    if glsr:
+        snapshot["global_long_short_ratio_5m"] = {
+            "long_account_pct": _safe_float(glsr.get("longAccount")),
+            "short_account_pct": _safe_float(glsr.get("shortAccount")),
+            "ratio": _safe_float(glsr.get("longShortRatio")),
+        }
+
+    tlsr = bm.fetch_top_trader_long_short_ratio(pair, period="5m")
+    if tlsr:
+        snapshot["top_trader_long_short_5m"] = {
+            "long_account_pct": _safe_float(tlsr.get("longAccount")),
+            "short_account_pct": _safe_float(tlsr.get("shortAccount")),
+            "ratio": _safe_float(tlsr.get("longShortRatio")),
+        }
+
+    # 多周期 K 线 + 指标
+    snapshot["klines"] = {}
+    snapshot["indicators"] = {}
+    for tf, limit in (("15m", 80), ("1h", 100), ("4h", 100)):
+        kl = bm.fetch_klines(pair, interval=tf, limit=limit)
+        if not kl:
+            continue
+        closes = _kline_closes(kl)
+        highs = _kline_highs(kl)
+        lows = _kline_lows(kl)
+        # 只送最后 20 根原始 OHLCV 给 AI（避免 prompt 过长）
+        snapshot["klines"][tf] = [
+            {
+                "open_time": int(k[0]),
+                "open": _safe_float(k[1]),
+                "high": _safe_float(k[2]),
+                "low": _safe_float(k[3]),
+                "close": _safe_float(k[4]),
+                "volume": _safe_float(k[5]),
+            }
+            for k in kl[-20:]
+        ]
+        snapshot["indicators"][tf] = {
+            "ma20": ind.sma(closes, 20),
+            "ma50": ind.sma(closes, 50),
+            "ema12": ind.ema(closes, 12),
+            "ema26": ind.ema(closes, 26),
+            "macd": ind.macd(closes),
+            "atr14": ind.atr(highs, lows, closes, 14),
+        }
+
+    return snapshot
+
+
+def _fmt_ai_block(ai: dict[str, Any]) -> tuple[str, str]:
+    """把 AI 输出格式化成 (text, markdown) 两份。"""
+    intervene = bool(ai.get("intervene"))
+    if not intervene:
+        reasoning = (ai.get("reasoning") or "").strip()
+        text = f"AI 建议：观望\n理由：{reasoning}" if reasoning else "AI 建议：观望"
+        md = (
+            f"> **AI 建议** 观望\n> \n> {reasoning}"
+            if reasoning
+            else "> **AI 建议** 观望"
+        )
+        return text, md
+
+    direction = ai.get("direction") or "?"
+    direction_cn = {"long": "做多", "short": "做空"}.get(direction, direction)
+    direction_color = (
+        "red" if direction == "long" else ("green" if direction == "short" else "grey")
+    )
+
+    position = ai.get("position") or "?"
+    position_cn = {"light": "轻仓", "heavy": "重仓"}.get(position, position)
+
+    entry = ai.get("entry_price")
+    sl = ai.get("stop_loss")
+    tp = ai.get("take_profit")
+    conf = ai.get("confidence")
+    reasoning = (ai.get("reasoning") or "").strip()
+
+    def _fmt_price_safe(v: Any) -> str:
+        f = _safe_float(v)
+        return _fmt_price(f) if f is not None else "—"
+
+    text_lines = [
+        f"AI 建议：{direction_cn} | {position_cn} | 置信度 {conf}",
+        f"介入：{_fmt_price_safe(entry)}  止损：{_fmt_price_safe(sl)}  止盈：{_fmt_price_safe(tp)}",
+    ]
+    if reasoning:
+        text_lines.append(f"理由：{reasoning}")
+
+    md_lines = [
+        f'> **AI 建议** <font color="{direction_color}">**{direction_cn}**</font>'
+        f" ｜ {position_cn} ｜ 置信度 **{conf}**",
+        f"> ",
+        f"> 介入 `{_fmt_price_safe(entry)}` 止损 `{_fmt_price_safe(sl)}` 止盈 `{_fmt_price_safe(tp)}`",
+    ]
+    if reasoning:
+        md_lines.append("> ")
+        md_lines.append(f"> {reasoning}")
+
+    return "\n".join(text_lines), "\n".join(md_lines)
 
 
 def notify_alerts(text_alerts: list[str], md_alerts: list[str]) -> None:
@@ -166,7 +340,7 @@ def notify_alerts(text_alerts: list[str], md_alerts: list[str]) -> None:
     title = "异动通知"
 
     body = "\n—————————————\n".join(text_alerts)
-    content = f"时间: {now}\n—————————————\n{body}"
+    content = f"时间：{now}\n—————————————\n{body}"
 
     md_body = "\n\n---\n\n".join(md_alerts)
     markdown = f"**时间** {now}\n\n---\n\n{md_body}"
@@ -217,28 +391,40 @@ def main() -> None:
         chg5 = change_pct
         chg15 = (item.get("openInterestChM15") or 0) * 100
         price = item.get("price") or 0
-        pair = item.get("symbol") or f"{symbol}USDT"
+        # 候选合约名：item.symbol > {base}USDT
+        pair = (item.get("symbol") or f"{symbol}USDT").upper()
+
+        # 币安永续不存在 → 跳过整条告警（不再通知）
+        if not bm.is_perpetual_listed(pair):
+            print(f"[oi_monitor] skip {pair}: 币安无此永续合约")
+            continue
+
         is_delisted = symbol.upper() in delisted_bases
 
         text = (
             f"{pair}\n"
-            f"5m 变动: {chg5:+.2f}%\n"
-            f"15m 变动: {chg15:+.2f}%\n"
-            f"当前价格: {_fmt_price(price)}"
+            f"5m 变动：{chg5:+.2f}%\n"
+            f"15m 变动：{chg15:+.2f}%\n"
+            f"当前价格：{_fmt_price(price)}"
         )
-        # 钉钉 markdown 富文本：### ticker + 引用块包数据 + 涨跌染色
         md = (
             f"### {pair}\n"
-            f"> **5m** {_fmt_pct(chg5)}　｜　**15m** {_fmt_pct(chg15)}\n"
+            f"> **5m** {_fmt_pct(chg5)} ｜ **15m** {_fmt_pct(chg15)}\n"
             f"> \n"
             f"> 价格 `{_fmt_price(price)}`"
         )
         if is_delisted:
             text += f"\n{DELIST_TAG}"
-            md += (
-                f"\n> \n"
-                f"> <font color=\"red\">**{DELIST_TAG}**</font>"
-            )
+            md += f'\n> \n> <font color="red">**{DELIST_TAG}**</font>'
+
+        # 行情快照 + AI 建议
+        snapshot = build_market_snapshot(pair, chg5, chg15)
+        if snapshot:
+            ai = ai_analyze(snapshot)
+            if ai:
+                ai_text, ai_md = _fmt_ai_block(ai)
+                text += "\n" + ai_text
+                md += "\n> \n" + ai_md
 
         text_alerts.append(text)
         md_alerts.append(md)
