@@ -147,6 +147,19 @@ def _fmt_price(p: float) -> str:
     return f"{p:.10f}"
 
 
+def _color(pct: float) -> str:
+    """涨用红、跌用绿（A 股惯例），平为灰。"""
+    if pct > 0:
+        return "red"
+    if pct < 0:
+        return "green"
+    return "grey"
+
+
+def _fmt_pct(pct: float) -> str:
+    return f"<font color=\"{_color(pct)}\">**{pct:+.2f}%**</font>"
+
+
 def notify_alerts(text_alerts: list[str], md_alerts: list[str]) -> None:
     """同时构造纯文本（给老 webhook）和 markdown（给飞书/钉钉）。"""
     now = datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S")
@@ -156,7 +169,7 @@ def notify_alerts(text_alerts: list[str], md_alerts: list[str]) -> None:
     content = f"时间: {now}\n—————————————\n{body}"
 
     md_body = "\n\n---\n\n".join(md_alerts)
-    markdown = f"**时间**：{now}\n\n---\n\n{md_body}"
+    markdown = f"**时间** {now}\n\n---\n\n{md_body}"
 
     result = dispatch(
         title=title,
@@ -213,14 +226,19 @@ def main() -> None:
             f"15m 变动: {chg15:+.2f}%\n"
             f"当前价格: {_fmt_price(price)}"
         )
+        # 钉钉 markdown 富文本：### ticker + 引用块包数据 + 涨跌染色
         md = (
-            f"**{pair}**\n"
-            f"- 5m: `{chg5:+.2f}%` ｜ 15m: `{chg15:+.2f}%`\n"
-            f"- 价格: `{_fmt_price(price)}`"
+            f"### {pair}\n"
+            f"> **5m** {_fmt_pct(chg5)}　｜　**15m** {_fmt_pct(chg15)}\n"
+            f"> \n"
+            f"> 价格 `{_fmt_price(price)}`"
         )
         if is_delisted:
             text += f"\n{DELIST_TAG}"
-            md += f"\n- {DELIST_TAG}"
+            md += (
+                f"\n> \n"
+                f"> <font color=\"red\">**{DELIST_TAG}**</font>"
+            )
 
         text_alerts.append(text)
         md_alerts.append(md)

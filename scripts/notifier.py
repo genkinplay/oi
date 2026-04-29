@@ -18,12 +18,23 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Iterable
 
 import requests
 
 DEFAULT_TIMEOUT = 10
+
+# 飞书 markdown 不渲染 <font color>，发送前剥离掉，保留内层文本
+_FONT_TAG_RE = re.compile(
+    r"""<font\s+color=['"]?[^'">]+['"]?\s*>(.*?)</font>""",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _strip_color_tags(md: str) -> str:
+    return _FONT_TAG_RE.sub(r"\1", md)
 
 
 def _split_urls(value: str | None) -> list[str]:
@@ -45,10 +56,12 @@ def send_feishu(
     timeout: int = DEFAULT_TIMEOUT,
 ) -> None:
     """飞书自定义机器人 - interactive 卡片，body 为 markdown。
-    title 走卡片 header（plain_text），不重复进 body。"""
+    title 走卡片 header（plain_text），不重复进 body。
+    飞书 markdown 不渲染 <font color>，发送前剥离避免标签裸露。"""
+    body = _strip_color_tags(markdown)
     card: dict = {
         "config": {"wide_screen_mode": True},
-        "elements": [{"tag": "markdown", "content": markdown}],
+        "elements": [{"tag": "markdown", "content": body}],
     }
     if title:
         card["header"] = {

@@ -8,21 +8,13 @@
 from __future__ import annotations
 
 import json
-import os
-import pathlib
 import re
-import sys
 import time
 from dataclasses import dataclass, field
 from html import unescape
 from typing import Any, Iterable
 
 import requests
-
-# 让本脚本在任意 cwd 下都能 import 同目录下的 notifier
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-
-from notifier import dispatch  # noqa: E402
 
 LIST_URL = "https://www.binance.com/bapi/composite/v1/public/cms/article/list/query"
 DETAIL_URL = "https://www.binance.com/bapi/composite/v1/public/cms/article/detail/query"
@@ -489,80 +481,14 @@ def write_output(
         f.write("\n")
 
 
-def load_previous_contracts(path: str = OUTPUT_PATH) -> set[str]:
-    if not os.path.exists(path):
-        return set()
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        return set(data.get("all_contracts", []) or [])
-    except (json.JSONDecodeError, OSError) as exc:
-        print(f"⚠️  读取旧 {path} 失败，按空处理: {exc}")
-        return set()
-
-
-def notify_diff(added: set[str], removed: set[str]) -> None:
-    """合约清单发生增删时推送。同时构造 text 和 markdown 两份。"""
-    if not added and not removed:
-        return
-    title = "📢 币安下架监控变动"
-
-    text_parts: list[str] = []
-    md_parts: list[str] = []
-
-    if added:
-        text_lines = "\n".join(f"  • {s}" for s in sorted(added))
-        text_parts.append(f"新增 {len(added)} 个待下架合约:\n{text_lines}")
-
-        md_lines = "\n".join(f"- `{s}`" for s in sorted(added))
-        md_parts.append(f"**新增 {len(added)} 个待下架合约**\n{md_lines}")
-
-    if removed:
-        text_lines = "\n".join(f"  • {s}" for s in sorted(removed))
-        text_parts.append(
-            f"移除 {len(removed)} 个 (已确认下架或公告滚出窗口):\n{text_lines}"
-        )
-
-        md_lines = "\n".join(f"- `{s}`" for s in sorted(removed))
-        md_parts.append(
-            f"**移除 {len(removed)} 个**（已确认下架或公告滚出窗口）\n{md_lines}"
-        )
-
-    content = "\n\n".join(text_parts)
-    markdown = "\n\n---\n\n".join(md_parts)
-
-    result = dispatch(
-        title=title,
-        content=content,
-        markdown=markdown,
-        task="binance_delisting",
-    )
-    print(
-        f"[bian] notify sent={result.sent} failed={result.failed} "
-        f"total={result.total}"
-    )
-
-
 def main() -> None:
-    previous = load_previous_contracts()
-
     direct, linked, _ = collect()
-    current = direct | linked
-
     write_output(direct, linked)
     print("\n===== 汇总 =====")
     print(f"🔻 直接合约下架: {len(direct)}")
     print(f"🔗 现货关联合约: {len(linked)}")
-    print(f"📦 合计（去重后）: {len(current)}")
+    print(f"📦 合计（去重后）: {len(direct | linked)}")
     print(f"📝 已写入 {OUTPUT_PATH}")
-
-    added = current - previous
-    removed = previous - current
-    if added or removed:
-        print(f"🔔 变动: +{len(added)} / -{len(removed)}")
-        notify_diff(added, removed)
-    else:
-        print("✅ 无变动，跳过通知")
 
 
 if __name__ == "__main__":

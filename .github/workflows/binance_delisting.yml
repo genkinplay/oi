@@ -36,11 +36,6 @@ jobs:
         run: pip install --upgrade requests
 
       - name: Run Binance delisting scraper
-        env:
-          # 监测到合约清单新增/移除时推送
-          WEBHOOK_URL: ${{ secrets.OI_WEBHOOK_URL }}
-          FEISHU_WEBHOOK_URLS: ${{ secrets.FEISHU_WEBHOOK_URLS }}
-          DINGTALK_WEBHOOK_URLS: ${{ secrets.DINGTALK_WEBHOOK_URLS }}
         run: python scripts/bian.py
 
       - name: Commit & push if delisted_symbols.json changed
