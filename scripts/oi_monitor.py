@@ -4,29 +4,56 @@ OI Monitor - GitHub Actions version
 Direct port of internal/runner/oi/runner.go, using the same coinank.com API.
 
 Environment variables:
-  WEBHOOK_URL         - Webhook URL to POST alerts to
-  THRESHOLD_PCT       - Alert threshold in percent (default: 10)
-  TOP_N               - Number of symbols to monitor (default: 50)
-  DEDUP_WINDOW_SEC    - Seconds before re-alerting same symbol (default: 3600)
-  DEDUP_FILE          - Path to dedup state file (default: /tmp/oi_dedup.json)
+  WEBHOOK_URL             - 旧版通用 webhook（POST {title, content, task}）；多个用逗号分隔
+  FEISHU_WEBHOOK_URLS     - 飞书自定义机器人 webhook 列表（逗号分隔）
+  DINGTALK_WEBHOOK_URLS   - 钉钉自定义机器人 webhook 列表（逗号分隔）
+  THRESHOLD_PCT           - Alert threshold in percent (default: 10)
+  TOP_N                   - Number of symbols to monitor (default: 50)
+  DEDUP_WINDOW_SEC        - Seconds before re-alerting same symbol (default: 3600)
+  DEDUP_FILE              - Path to dedup state file (default: /tmp/oi_dedup.json)
 """
 
 import base64
 import json
 import math
 import os
+import pathlib
+import sys
 import time
 from datetime import datetime, timedelta, timezone
+
+# 让本脚本在任意 cwd 下都能 import 同目录下的 notifier 模块
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 CST = timezone(timedelta(hours=8))
 
 import requests
+from notifier import dispatch  # noqa: E402
 
 THRESHOLD_PCT = float(os.environ.get("THRESHOLD_PCT", "10"))
 TOP_N = int(os.environ.get("TOP_N", "50"))
 DEDUP_WINDOW_SEC = int(os.environ.get("DEDUP_WINDOW_SEC", "3600"))
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
 DEDUP_FILE = os.environ.get("DEDUP_FILE", "/tmp/oi_dedup.json")
+
+DELISTING_LIST_URL = os.environ.get(
+    "DELISTING_LIST_URL",
+    "https://raw.githubusercontent.com/genkinplay/oi/refs/heads/main/delisted_symbols.json",
+)
+DELIST_TAG = "即将下架不建议参与"
+
+# 从下架合约符号里剥离出 base coin 时尝试的 quote 后缀（长的优先）
+_QUOTE_SUFFIXES: tuple[str, ...] = (
+    "USD_PERP",
+    "FDUSD",
+    "BUSD",
+    "TUSD",
+    "USDC",
+    "USDT",
+    "BTC",
+    "ETH",
+    "BNB",
+    "USD",
+)
 
 
 def generate_api_key() -> str:
@@ -76,6 +103,38 @@ def save_dedup(state: dict[str, float]) -> None:
         json.dump(state, f)
 
 
+def _extract_base(symbol: str) -> str | None:
+    """把 'AIUSDT' / 'BTCUSD_PERP' / 'ETHBUSD' 等剥离成 base 部分。"""
+    s = symbol.upper().strip()
+    for q in _QUOTE_SUFFIXES:
+        if s.endswith(q) and len(s) > len(q):
+            return s[: -len(q)]
+    return None
+
+
+def fetch_delisted_bases(timeout: int = 10) -> set[str]:
+    """从远端 delisted_symbols.json 拉取待下架合约清单，返回其 base coin 集合。
+    任何失败都视为空集（不阻塞通知主流程）。"""
+    try:
+        resp = requests.get(DELISTING_LIST_URL, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:  # noqa: BLE001 - 容错，远端拉不到就跳过标签
+        print(f"[oi_monitor] 拉取下架清单失败，跳过标签注入: {exc}")
+        return set()
+
+    contracts = data.get("all_contracts") or []
+    bases: set[str] = set()
+    for sym in contracts:
+        if not isinstance(sym, str):
+            continue
+        base = _extract_base(sym)
+        if base:
+            bases.add(base)
+    print(f"[oi_monitor] 下架清单: {len(contracts)} 合约 / {len(bases)} 币种")
+    return bases
+
+
 def _fmt_price(p: float) -> str:
     if p >= 100:
         return f"{p:.2f}"
@@ -88,13 +147,27 @@ def _fmt_price(p: float) -> str:
     return f"{p:.10f}"
 
 
-def send_webhook(url: str, alerts: list[str]) -> None:
+def notify_alerts(text_alerts: list[str], md_alerts: list[str]) -> None:
+    """同时构造纯文本（给老 webhook）和 markdown（给飞书/钉钉）。"""
     now = datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S")
-    body = "\n—————————————\n".join(alerts)
-    content = f"🚨 OI 异动提醒\n时间: {now}\n—————————————\n{body}"
-    payload = {"title": "OI 异动告警", "content": content, "task": "oi_monitor"}
-    resp = requests.post(url, json=payload, timeout=10)
-    resp.raise_for_status()
+    title = "异动通知"
+
+    body = "\n—————————————\n".join(text_alerts)
+    content = f"时间: {now}\n—————————————\n{body}"
+
+    md_body = "\n\n---\n\n".join(md_alerts)
+    markdown = f"**时间**：{now}\n\n---\n\n{md_body}"
+
+    result = dispatch(
+        title=title,
+        content=content,
+        markdown=markdown,
+        task="oi_monitor",
+    )
+    print(
+        f"[oi_monitor] notify sent={result.sent} failed={result.failed} "
+        f"total={result.total}"
+    )
 
 
 def main() -> None:
@@ -110,10 +183,12 @@ def main() -> None:
         top3.append(f"{symbol} {chg:.2f}%")
     print(f"[oi_monitor] fetched={len(items)} top3: {' | '.join(top3)}")
 
-    dedup = load_dedup()
-    alerts: list[str] = []
+    delisted_bases = fetch_delisted_bases()
 
-    alert_count = 0
+    dedup = load_dedup()
+    text_alerts: list[str] = []
+    md_alerts: list[str] = []
+
     for item in items[:3]:
         symbol = item.get("baseCoin")
         change_raw = item.get("openInterestChM5")
@@ -125,35 +200,42 @@ def main() -> None:
         last = dedup.get(symbol)
         if last and (time.time() - last) < DEDUP_WINDOW_SEC:
             continue
-        alert_count += 1
+
         chg5 = change_pct
         chg15 = (item.get("openInterestChM15") or 0) * 100
         price = item.get("price") or 0
-        exchange = item.get("exchangeName") or ""
         pair = item.get("symbol") or f"{symbol}USDT"
-        alert_lines = (
+        is_delisted = symbol.upper() in delisted_bases
+
+        text = (
             f"{pair}\n"
             f"5m 变动: {chg5:+.2f}%\n"
             f"15m 变动: {chg15:+.2f}%\n"
             f"当前价格: {_fmt_price(price)}"
         )
-        alerts.append(alert_lines)
+        md = (
+            f"**{pair}**\n"
+            f"- 5m: `{chg5:+.2f}%` ｜ 15m: `{chg15:+.2f}%`\n"
+            f"- 价格: `{_fmt_price(price)}`"
+        )
+        if is_delisted:
+            text += f"\n{DELIST_TAG}"
+            md += f"\n- {DELIST_TAG}"
+
+        text_alerts.append(text)
+        md_alerts.append(md)
         dedup[symbol] = time.time()
 
     save_dedup(dedup)
-    print(f"[oi_monitor] alerts: {len(alerts)}")
+    print(f"[oi_monitor] alerts: {len(text_alerts)}")
 
-    if not alerts:
+    if not text_alerts:
         return
 
-    for a in alerts:
+    for a in text_alerts:
         print(f"[oi_monitor] ALERT {a}")
 
-    if WEBHOOK_URL:
-        send_webhook(WEBHOOK_URL, alerts)
-        print("[oi_monitor] webhook sent")
-    else:
-        print("[oi_monitor] WEBHOOK_URL not set, skipping notification")
+    notify_alerts(text_alerts, md_alerts)
 
 
 if __name__ == "__main__":

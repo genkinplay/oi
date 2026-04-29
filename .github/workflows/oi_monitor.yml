@@ -34,7 +34,10 @@ jobs:
 
       - name: Run OI Monitor
         env:
+          # 多渠道 webhook（任意一个或多个；多个用逗号分隔，可放在 secret 里）
           WEBHOOK_URL: ${{ secrets.OI_WEBHOOK_URL }}
+          FEISHU_WEBHOOK_URLS: ${{ secrets.FEISHU_WEBHOOK_URLS }}
+          DINGTALK_WEBHOOK_URLS: ${{ secrets.DINGTALK_WEBHOOK_URLS }}
           THRESHOLD_PCT: ${{ vars.OI_THRESHOLD_PCT || '10' }}
           TOP_N: ${{ vars.OI_TOP_N || '50' }}
           PERIOD: ${{ vars.OI_PERIOD || '5m' }}
