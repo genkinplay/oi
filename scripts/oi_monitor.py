@@ -287,11 +287,11 @@ def _fmt_ai_block(ai: dict[str, Any]) -> tuple[str, str]:
     intervene = bool(ai.get("intervene"))
     if not intervene:
         reasoning = (ai.get("reasoning") or "").strip()
-        text = f"AI 建议：观望\n理由：{reasoning}" if reasoning else "AI 建议：观望"
+        text = f"建议：观望\n理由：{reasoning}" if reasoning else "建议：观望"
         md = (
-            f"> **AI 建议** 观望\n> \n> {reasoning}"
+            f"> **建议** 观望\n> \n> {reasoning}"
             if reasoning
-            else "> **AI 建议** 观望"
+            else "> **建议** 观望"
         )
         return text, md
 
@@ -315,14 +315,14 @@ def _fmt_ai_block(ai: dict[str, Any]) -> tuple[str, str]:
         return _fmt_price(f) if f is not None else "—"
 
     text_lines = [
-        f"AI 建议：{direction_cn} | {position_cn} | 置信度 {conf}",
+        f"建议：{direction_cn} | {position_cn} | 置信度 {conf}",
         f"介入：{_fmt_price_safe(entry)}  止损：{_fmt_price_safe(sl)}  止盈：{_fmt_price_safe(tp)}",
     ]
     if reasoning:
         text_lines.append(f"理由：{reasoning}")
 
     md_lines = [
-        f'> **AI 建议** <font color="{direction_color}">**{direction_cn}**</font>'
+        f'> **建议** <font color="{direction_color}">**{direction_cn}**</font>'
         f" ｜ {position_cn} ｜ 置信度 **{conf}**",
         f"> ",
         f"> 介入 `{_fmt_price_safe(entry)}` 止损 `{_fmt_price_safe(sl)}` 止盈 `{_fmt_price_safe(tp)}`",
@@ -416,15 +416,16 @@ def main() -> None:
         if is_delisted:
             text += f"\n{DELIST_TAG}"
             md += f'\n> \n> <font color="red">**{DELIST_TAG}**</font>'
-
-        # 行情快照 + AI 建议
-        snapshot = build_market_snapshot(pair, chg5, chg15)
-        if snapshot:
-            ai = ai_analyze(snapshot)
-            if ai:
-                ai_text, ai_md = _fmt_ai_block(ai)
-                text += "\n" + ai_text
-                md += "\n> \n" + ai_md
+            # 即将下架的标的不参与交易判断，直接推送
+        else:
+            # 行情快照 + 建议
+            snapshot = build_market_snapshot(pair, chg5, chg15)
+            if snapshot:
+                ai = ai_analyze(snapshot)
+                if ai:
+                    ai_text, ai_md = _fmt_ai_block(ai)
+                    text += "\n" + ai_text
+                    md += "\n> \n" + ai_md
 
         text_alerts.append(text)
         md_alerts.append(md)
