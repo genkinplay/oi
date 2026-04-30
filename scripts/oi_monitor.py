@@ -410,7 +410,7 @@ def main() -> None:
         # 跟币安 fapi 的 <BASE>USDT 命名不一致，直接用 baseCoin 拼 USDT 永续。
         pair = f"{symbol.upper()}USDT"
 
-        # 币安永续不存在 → 记入 signals（被过滤），但不进入告警
+        # 币安永续过滤：明确不存在则跳过；清单不可用（如 451）会保守放行
         if not bm.is_perpetual_listed(pair):
             print(f"[oi_monitor] skip {pair}: 币安无此 USDT 永续合约")
             signals.append(
@@ -424,13 +424,14 @@ def main() -> None:
             )
             continue
 
+        reason = "清单不可用，保守放行" if bm._EXCHANGE_INFO_UNAVAILABLE else None
         signals.append(
             {
                 "pair": pair,
                 "chg5": chg5,
                 "chg15": chg15,
                 "passed": True,
-                "reason": None,
+                "reason": reason,
             }
         )
 
@@ -499,7 +500,13 @@ def write_run_marker(
         details = ", ".join(
             (
                 f"{s['pair']} 5m {s['chg5']:+.2f}% / 15m {s['chg15']:+.2f}%"
-                + ("" if s["passed"] else f" [过滤：{s['reason']}]")
+                + (
+                    ""
+                    if s["passed"] and not s.get("reason")
+                    else (
+                        f" [{'过滤' if not s['passed'] else '注意'}：{s['reason']}]"
+                    )
+                )
             )
             for s in signals
         )
@@ -515,7 +522,10 @@ def write_run_marker(
                 f.write("| 标的 | 5m 变动 | 15m 变动 | 状态 |\n")
                 f.write("| --- | --- | --- | --- |\n")
                 for s in signals:
-                    status = "通过" if s["passed"] else f"过滤：{s['reason']}"
+                    if s["passed"]:
+                        status = "通过" if not s.get("reason") else f"通过（{s['reason']}）"
+                    else:
+                        status = f"过滤：{s['reason']}"
                     f.write(
                         f"| `{s['pair']}` | {s['chg5']:+.2f}% | "
                         f"{s['chg15']:+.2f}% | {status} |\n"

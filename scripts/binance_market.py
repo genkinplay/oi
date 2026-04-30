@@ -13,8 +13,16 @@ import requests
 FAPI_BASE = "https://fapi.binance.com"
 DEFAULT_TIMEOUT = 10
 
+import json
+import pathlib
+
 # 模块级缓存：exchangeInfo 数据量大（>600 个合约），单次运行内复用
 _LIVE_SYMBOLS: set[str] | None = None
+# 拉 exchangeInfo 失败（如 451 地域屏蔽）后置 True；后续 is_perpetual_listed 改为放行
+_EXCHANGE_INFO_UNAVAILABLE: bool = False
+
+# 本地清单快照路径：GitHub Actions runner 被币安 451 拒绝时使用
+_SYMBOLS_FILE = pathlib.Path(__file__).resolve().parent / "binance_symbols.json"
 
 
 def _get(
@@ -29,24 +37,66 @@ def _get(
         return None
 
 
+def _load_symbols_from_local() -> set[str] | None:
+    if not _SYMBOLS_FILE.exists():
+        return None
+    try:
+        payload = json.loads(_SYMBOLS_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"[binance] 本地清单解析失败：{exc}")
+        return None
+    syms = payload.get("symbols") or []
+    if not syms:
+        return None
+    print(
+        f"[binance] 使用本地清单（{len(syms)} 合约 / "
+        f"updated_at={payload.get('updated_at', 'unknown')}）"
+    )
+    return {s for s in syms if isinstance(s, str)}
+
+
 def load_live_symbols() -> set[str]:
-    """拉一次 exchangeInfo，缓存所有 TRADING 状态的合约名。"""
-    global _LIVE_SYMBOLS
+    """加载币安 USDT-M 永续合约清单。
+    优先实时拉 fapi/exchangeInfo（永远拿最新）；
+    GitHub Actions 上 451 屏蔽时，回落到本地 binance_symbols.json。"""
+    global _LIVE_SYMBOLS, _EXCHANGE_INFO_UNAVAILABLE
     if _LIVE_SYMBOLS is not None:
         return _LIVE_SYMBOLS
+
+    # 1) 实时拉
     data = _get("/fapi/v1/exchangeInfo")
-    symbols: set[str] = set()
-    if isinstance(data, dict):
-        for s in data.get("symbols", []) or []:
-            if s.get("status") == "TRADING":
-                symbols.add(s["symbol"])
-    _LIVE_SYMBOLS = symbols
-    return symbols
+    if isinstance(data, dict) and data.get("symbols"):
+        symbols = {
+            s["symbol"]
+            for s in data["symbols"]
+            if s.get("status") == "TRADING"
+        }
+        if symbols:
+            print(f"[binance] 使用 fapi 实时清单（{len(symbols)} 合约）")
+            _LIVE_SYMBOLS = symbols
+            return symbols
+
+    # 2) 本地兜底
+    local = _load_symbols_from_local()
+    if local:
+        _LIVE_SYMBOLS = local
+        return local
+
+    # 3) 都拿不到 → 放行模式，避免大面积误过滤
+    _EXCHANGE_INFO_UNAVAILABLE = True
+    print(
+        "[binance] fapi 与本地清单均不可用，is_perpetual_listed 进入放行模式"
+    )
+    return set()
 
 
 def is_perpetual_listed(symbol: str) -> bool:
-    """该 symbol 是否在币安 USDT-M 永续合约里活跃。"""
-    return symbol.upper() in load_live_symbols()
+    """该 symbol 是否在币安 USDT-M 永续合约里活跃。
+    清单不可用时保守放行（返回 True），避免大量误过滤。"""
+    syms = load_live_symbols()
+    if _EXCHANGE_INFO_UNAVAILABLE:
+        return True
+    return symbol.upper() in syms
 
 
 def fetch_24h(symbol: str) -> Optional[dict]:
