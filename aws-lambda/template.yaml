@@ -1,0 +1,130 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: |
+  OI 异动监控 - AWS Lambda 完整部署
+  - Lambda（Python 3.12）每 2 分钟跑一次
+  - DynamoDB 用作 dedup 状态存储（按 TTL 自动清理）
+  - EventBridge schedule 触发
+  - CloudWatch Logs 自动收集
+
+Parameters:
+  ScheduleExpression:
+    Type: String
+    Default: rate(2 minutes)
+    Description: 定时触发表达式：rate(2 minutes) 表示每 2 分钟执行一次
+
+  ThresholdPct:
+    Type: Number
+    Default: 10
+    Description: 5 分钟 OI 变动阈值（百分比，绝对值，默认 10）
+
+  ThresholdPct15m:
+    Type: Number
+    Default: 15
+    Description: 15 分钟 OI 变动阈值（百分比，绝对值，默认 15）
+
+  TopN:
+    Type: Number
+    Default: 50
+    Description: 从 coinank 拉取前 N 名标的（默认 50）
+
+  DedupWindowSec:
+    Type: Number
+    Default: 1800
+    Description: 同一标的去重窗口（秒，默认 1800 = 30 分钟）
+
+  DeepSeekModel:
+    Type: String
+    Default: deepseek-v4-pro
+    Description: DeepSeek 模型名（可选 deepseek-v4-flash 提速）
+
+  DelistingListUrl:
+    Type: String
+    Default: https://raw.githubusercontent.com/genkinplay/oi/refs/heads/main/delisted_symbols.json
+    Description: 远端下架清单 URL（保留默认即可，由 GitHub Actions 自动维护）
+
+  DeepSeekApiKey:
+    Type: String
+    Default: ""
+    Description: DeepSeek API key 例如 sk-xxxx（留空则跳过 AI 分析；输入时会回显）
+
+  FeishuWebhookUrls:
+    Type: String
+    Default: ""
+    Description: 飞书机器人 webhook 完整 URL；多个用英文逗号分隔；不用就留空
+
+  DingtalkWebhookUrls:
+    Type: String
+    Default: ""
+    Description: 钉钉机器人 webhook 完整 URL；多个用英文逗号分隔；不用就留空
+
+  WebhookUrl:
+    Type: String
+    Default: ""
+    Description: 旧版通用 webhook URL（可选；留空则不发送）
+
+Resources:
+  DedupTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: oi-monitor-dedup
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: base
+          AttributeType: S
+      KeySchema:
+        - AttributeName: base
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expire_at
+        Enabled: true
+
+  OIMonitorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: oi-monitor
+      CodeUri: app/
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.12
+      MemorySize: 256
+      Timeout: 60
+      Architectures: [x86_64]
+      Environment:
+        Variables:
+          DEDUP_TABLE: !Ref DedupTable
+          THRESHOLD_PCT: !Ref ThresholdPct
+          THRESHOLD_PCT_15M: !Ref ThresholdPct15m
+          TOP_N: !Ref TopN
+          DEDUP_WINDOW_SEC: !Ref DedupWindowSec
+          DEEPSEEK_MODEL: !Ref DeepSeekModel
+          DELISTING_LIST_URL: !Ref DelistingListUrl
+          DEEPSEEK_API_KEY: !Ref DeepSeekApiKey
+          FEISHU_WEBHOOK_URLS: !Ref FeishuWebhookUrls
+          DINGTALK_WEBHOOK_URLS: !Ref DingtalkWebhookUrls
+          WEBHOOK_URL: !Ref WebhookUrl
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DedupTable
+      Events:
+        ScheduledRun:
+          Type: Schedule
+          Properties:
+            Schedule: !Ref ScheduleExpression
+            Name: oi-monitor-schedule
+
+  OIMonitorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${OIMonitorFunction}
+      RetentionInDays: 14
+
+Outputs:
+  FunctionName:
+    Description: Lambda function 名称
+    Value: !Ref OIMonitorFunction
+  DedupTableName:
+    Description: DynamoDB dedup 表
+    Value: !Ref DedupTable
+  LogGroup:
+    Description: CloudWatch Logs group
+    Value: !Ref OIMonitorLogGroup

@@ -22,10 +22,26 @@ node_modules/
 .dev.vars
 *.tsbuildinfo
 
+# --- AWS SAM / Lambda ---
+# samconfig.toml 包含敏感参数（API key、webhook token），坚决不入库
+aws-lambda/samconfig.toml
+samconfig.toml
+# SAM 构建产物
+.aws-sam/
+**/.aws-sam/
+# 误生成的临时配置文件（向导问"配置文件名"时输了 y/n 等就会生成）
+aws-lambda/y
+aws-lambda/n
+
+# --- 部署产物 zip ---
+*.zip
+
 # --- 环境变量 / 密钥 ---
 .env
 .env.*
 !.env.example
+*.pem
+*.key
 
 # --- IDE / Editors ---
 .vscode/
