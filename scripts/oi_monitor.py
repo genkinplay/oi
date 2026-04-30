@@ -9,7 +9,8 @@ Environment variables:
   DINGTALK_WEBHOOK_URLS   - 钉钉自定义机器人 webhook 列表（逗号分隔）
   DEEPSEEK_API_KEY        - DeepSeek API key（不配则跳过 AI 分析）
   DEEPSEEK_MODEL          - DeepSeek 模型名（默认 deepseek-v4-pro，可选 deepseek-v4-flash）
-  THRESHOLD_PCT           - Alert threshold in percent (default: 10)
+  THRESHOLD_PCT           - 5m OI 变动阈值（百分比，默认 10）
+  THRESHOLD_PCT_15M       - 15m OI 变动阈值（百分比，默认 15）
   TOP_N                   - Number of symbols to monitor (default: 50)
   DEDUP_WINDOW_SEC        - Seconds before re-alerting same symbol (default: 3600)
   DEDUP_FILE              - Path to dedup state file (default: /tmp/oi_dedup.json)
@@ -37,6 +38,7 @@ from ai_analyzer import analyze as ai_analyze  # noqa: E402
 from notifier import dispatch  # noqa: E402
 
 THRESHOLD_PCT = float(os.environ.get("THRESHOLD_PCT", "10"))
+THRESHOLD_PCT_15M = float(os.environ.get("THRESHOLD_PCT_15M", "15"))
 TOP_N = int(os.environ.get("TOP_N", "50"))
 DEDUP_WINDOW_SEC = int(os.environ.get("DEDUP_WINDOW_SEC", "1800"))
 DEDUP_FILE = os.environ.get("DEDUP_FILE", "/tmp/oi_dedup.json")
@@ -355,7 +357,8 @@ def notify_alerts(text_alerts: list[str], md_alerts: list[str]) -> None:
 
 def main() -> None:
     print(
-        f"[oi_monitor] threshold={THRESHOLD_PCT}% top_n={TOP_N} dedup_window={DEDUP_WINDOW_SEC}s"
+        f"[oi_monitor] threshold 5m={THRESHOLD_PCT}% 15m={THRESHOLD_PCT_15M}% "
+        f"top_n={TOP_N} dedup_window={DEDUP_WINDOW_SEC}s"
     )
 
     # 分别按 5m 和 15m 排序拉两次 top3，合并候选 → OR 阈值
@@ -415,7 +418,7 @@ def main() -> None:
         chg5 = (item.get("openInterestChM5") or 0) * 100
         chg15 = (item.get("openInterestChM15") or 0) * 100
         # OR 触发：任一周期超阈值
-        if math.fabs(chg5) < THRESHOLD_PCT and math.fabs(chg15) < THRESHOLD_PCT:
+        if math.fabs(chg5) < THRESHOLD_PCT and math.fabs(chg15) < THRESHOLD_PCT_15M:
             continue
 
         pair = f"{symbol.upper()}USDT"

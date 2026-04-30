@@ -14,7 +14,9 @@ import os
 
 # fapi 基地址。默认直连币安；GitHub Actions 上配置 BINANCE_FAPI_BASE
 # 指向 Cloudflare Worker 代理（cloudflare/worker.ts），绕开 451 屏蔽。
-FAPI_BASE = os.environ.get("BINANCE_FAPI_BASE", "https://fapi.binance.com").rstrip("/")
+# 注意：GitHub 上 Variable 留空会传入空字符串，需要把它当作未设处理。
+_fapi_env = os.environ.get("BINANCE_FAPI_BASE", "").strip()
+FAPI_BASE = (_fapi_env or "https://fapi.binance.com").rstrip("/")
 # 走 Worker 代理时附带的 secret，对应 worker 的 env.PROXY_SECRET
 _PROXY_SECRET = os.environ.get("BINANCE_PROXY_SECRET", "").strip()
 
