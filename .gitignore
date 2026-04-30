@@ -1,41 +1,49 @@
-# Python
+# --- Python ---
 __pycache__/
 *.py[cod]
 *.so
 *.egg-info/
-build/
-dist/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 htmlcov/
+build/
+dist/
 
-# Virtual environments
+# --- 虚拟环境 / 包管理 ---
 .venv/
 venv/
 env/
 
-# Environment variables
-.env
-.env.local
-.env.*.local
+# --- Node / Cloudflare Workers ---
+node_modules/
+.wrangler/
+.dev.vars
+*.tsbuildinfo
 
-# IDE / Editors
+# --- 环境变量 / 密钥 ---
+.env
+.env.*
+!.env.example
+
+# --- IDE / Editors ---
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# AI tooling local state
+# --- AI 工具本地状态 ---
 .claude/
 .cursor/
 .aider*
 
-# OS
+# --- OS ---
 .DS_Store
 Thumbs.db
 
-# Runtime state
+# --- 运行时状态 / 临时 ---
 oi_dedup.json
 *.log
+*.tmp
+*.bak

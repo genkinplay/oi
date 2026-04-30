@@ -10,7 +10,14 @@ from typing import Optional
 
 import requests
 
-FAPI_BASE = "https://fapi.binance.com"
+import os
+
+# fapi 基地址。默认直连币安；GitHub Actions 上配置 BINANCE_FAPI_BASE
+# 指向 Cloudflare Worker 代理（cloudflare/worker.ts），绕开 451 屏蔽。
+FAPI_BASE = os.environ.get("BINANCE_FAPI_BASE", "https://fapi.binance.com").rstrip("/")
+# 走 Worker 代理时附带的 secret，对应 worker 的 env.PROXY_SECRET
+_PROXY_SECRET = os.environ.get("BINANCE_PROXY_SECRET", "").strip()
+
 DEFAULT_TIMEOUT = 10
 
 import json
@@ -28,8 +35,13 @@ _SYMBOLS_FILE = pathlib.Path(__file__).resolve().parent / "binance_symbols.json"
 def _get(
     path: str, params: dict | None = None, timeout: int = DEFAULT_TIMEOUT
 ) -> dict | list | None:
+    headers = {}
+    if _PROXY_SECRET:
+        headers["X-Proxy-Secret"] = _PROXY_SECRET
     try:
-        resp = requests.get(f"{FAPI_BASE}{path}", params=params, timeout=timeout)
+        resp = requests.get(
+            f"{FAPI_BASE}{path}", params=params, headers=headers, timeout=timeout
+        )
         resp.raise_for_status()
         return resp.json()
     except Exception as exc:  # noqa: BLE001
