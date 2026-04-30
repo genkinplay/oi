@@ -3,10 +3,10 @@ name: OI Monitor
 on:
   workflow_dispatch: # allow manual trigger
 
-# 添加并发控制
+# 同一时间只允许一个实例在跑；上一次跑完前来的新 dispatch 会等待，而不是取消旧的
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   monitor:

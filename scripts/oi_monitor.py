@@ -362,12 +362,28 @@ def main() -> None:
     items_5m = fetch_oi(TOP_N, sort_by="openInterestChM5")
     items_15m = fetch_oi(TOP_N, sort_by="openInterestChM15")
 
-    candidates: dict[str, dict] = {}
+    # coinank 在不同 sortBy 下返回的同一标的字段值会缺失或 None，
+    # 先把两份**全表**做字段级 union（缺什么补什么），再从中按候选顺序取。
+    merged: dict[str, dict] = {}
+    for it in items_5m + items_15m:
+        base = it.get("baseCoin")
+        if not base:
+            continue
+        if base not in merged:
+            merged[base] = dict(it)
+        else:
+            for k, v in it.items():
+                if merged[base].get(k) is None and v is not None:
+                    merged[base][k] = v
+
+    candidate_order: list[str] = []
+    seen: set[str] = set()
     for it in items_5m[:3] + items_15m[:3]:
         base = it.get("baseCoin")
-        if base and base not in candidates:
-            candidates[base] = it
-    items = list(candidates.values())
+        if base and base not in seen:
+            seen.add(base)
+            candidate_order.append(base)
+    items = [merged[b] for b in candidate_order if b in merged]
 
     top5m = " | ".join(
         f"{x.get('baseCoin','')} {(x.get('openInterestChM5') or 0)*100:.2f}%"
@@ -401,14 +417,26 @@ def main() -> None:
         # OR 触发：任一周期超阈值
         if math.fabs(chg5) < THRESHOLD_PCT and math.fabs(chg15) < THRESHOLD_PCT:
             continue
+
+        pair = f"{symbol.upper()}USDT"
+
+        # dedup 跳过：仍然记入 signals 让 summary 看得见
         last = dedup.get(symbol)
         if last and (time.time() - last) < DEDUP_WINDOW_SEC:
+            mins_ago = int((time.time() - last) / 60)
+            print(f"[oi_monitor] skip {pair}: dedup（{mins_ago}m 前已告警）")
+            signals.append(
+                {
+                    "pair": pair,
+                    "chg5": chg5,
+                    "chg15": chg15,
+                    "passed": False,
+                    "reason": f"dedup 内（{mins_ago}m 前已告警）",
+                }
+            )
             continue
 
         price = item.get("price") or 0
-        # coinank 返回的 item.symbol 经常是 <BASE>PERP 形式（如 1000NEIROCTOPERP），
-        # 跟币安 fapi 的 <BASE>USDT 命名不一致，直接用 baseCoin 拼 USDT 永续。
-        pair = f"{symbol.upper()}USDT"
 
         # 币安永续过滤：明确不存在则跳过；清单不可用（如 451）会保守放行
         if not bm.is_perpetual_listed(pair):
