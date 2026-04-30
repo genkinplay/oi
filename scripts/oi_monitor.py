@@ -72,10 +72,10 @@ def generate_api_key() -> str:
     return base64.b64encode(raw.encode()).decode()
 
 
-def fetch_oi(top_n: int) -> list[dict]:
+def fetch_oi(top_n: int, sort_by: str = "openInterestChM5") -> list[dict]:
     url = (
         f"https://api.coinank.com/api/instruments/agg"
-        f"?sortBy=openInterestChM5&sortType=descend&type=oi&page=1&size={top_n}"
+        f"?sortBy={sort_by}&sortType=descend&type=oi&page=1&size={top_n}"
     )
     headers = {
         "coinank-apikey": generate_api_key(),
@@ -89,7 +89,7 @@ def fetch_oi(top_n: int) -> list[dict]:
     }
     resp = requests.get(url, headers=headers, timeout=15)
     body = resp.text[:200]
-    print(f"[oi_monitor] api status={resp.status_code} body={body}")
+    print(f"[oi_monitor] api sort={sort_by} status={resp.status_code}")
     data = resp.json()
     if not data.get("success"):
         raise RuntimeError(f"API returned failure: {body}")
@@ -358,36 +358,53 @@ def main() -> None:
         f"[oi_monitor] threshold={THRESHOLD_PCT}% top_n={TOP_N} dedup_window={DEDUP_WINDOW_SEC}s"
     )
 
-    items = fetch_oi(TOP_N)
-    top3 = []
-    for i, item in enumerate(items[:3]):
-        symbol = item.get("baseCoin", "")
-        chg = item.get("openInterestChM5", 0) * 100
-        top3.append(f"{symbol} {chg:.2f}%")
-    print(f"[oi_monitor] fetched={len(items)} top3: {' | '.join(top3)}")
+    # 分别按 5m 和 15m 排序拉两次 top3，合并候选 → OR 阈值
+    items_5m = fetch_oi(TOP_N, sort_by="openInterestChM5")
+    items_15m = fetch_oi(TOP_N, sort_by="openInterestChM15")
+
+    candidates: dict[str, dict] = {}
+    for it in items_5m[:3] + items_15m[:3]:
+        base = it.get("baseCoin")
+        if base and base not in candidates:
+            candidates[base] = it
+    items = list(candidates.values())
+
+    top5m = " | ".join(
+        f"{x.get('baseCoin','')} {(x.get('openInterestChM5') or 0)*100:.2f}%"
+        for x in items_5m[:3]
+    )
+    top15m = " | ".join(
+        f"{x.get('baseCoin','')} {(x.get('openInterestChM15') or 0)*100:.2f}%"
+        for x in items_15m[:3]
+    )
+    print(
+        f"[oi_monitor] fetched 5m={len(items_5m)} 15m={len(items_15m)} "
+        f"candidates={len(items)}"
+    )
+    print(f"[oi_monitor] top3@5m:  {top5m}")
+    print(f"[oi_monitor] top3@15m: {top15m}")
 
     delisted_bases = fetch_delisted_bases()
 
     dedup = load_dedup()
     text_alerts: list[str] = []
     md_alerts: list[str] = []
-    # signals = 过阈值 + 不在 dedup 窗口内的标的（含被币安过滤的）
+    # signals = 5m / 15m 至少一项过阈值且不在 dedup 窗口内的标的（含被币安过滤的）
     signals: list[dict[str, Any]] = []
 
-    for item in items[:3]:
+    for item in items:
         symbol = item.get("baseCoin")
-        change_raw = item.get("openInterestChM5")
-        if not symbol or change_raw is None:
+        if not symbol:
             continue
-        change_pct = change_raw * 100
-        if math.fabs(change_pct) < THRESHOLD_PCT:
+        chg5 = (item.get("openInterestChM5") or 0) * 100
+        chg15 = (item.get("openInterestChM15") or 0) * 100
+        # OR 触发：任一周期超阈值
+        if math.fabs(chg5) < THRESHOLD_PCT and math.fabs(chg15) < THRESHOLD_PCT:
             continue
         last = dedup.get(symbol)
         if last and (time.time() - last) < DEDUP_WINDOW_SEC:
             continue
 
-        chg5 = change_pct
-        chg15 = (item.get("openInterestChM15") or 0) * 100
         price = item.get("price") or 0
         # coinank 返回的 item.symbol 经常是 <BASE>PERP 形式（如 1000NEIROCTOPERP），
         # 跟币安 fapi 的 <BASE>USDT 命名不一致，直接用 baseCoin 拼 USDT 永续。
@@ -397,11 +414,25 @@ def main() -> None:
         if not bm.is_perpetual_listed(pair):
             print(f"[oi_monitor] skip {pair}: 币安无此 USDT 永续合约")
             signals.append(
-                {"pair": pair, "chg5": chg5, "passed": False, "reason": "币安无此 USDT 永续"}
+                {
+                    "pair": pair,
+                    "chg5": chg5,
+                    "chg15": chg15,
+                    "passed": False,
+                    "reason": "币安无此 USDT 永续",
+                }
             )
             continue
 
-        signals.append({"pair": pair, "chg5": chg5, "passed": True, "reason": None})
+        signals.append(
+            {
+                "pair": pair,
+                "chg5": chg5,
+                "chg15": chg15,
+                "passed": True,
+                "reason": None,
+            }
+        )
 
         is_delisted = symbol.upper() in delisted_bases
 
@@ -438,7 +469,7 @@ def main() -> None:
     save_dedup(dedup)
     print(f"[oi_monitor] signals: {len(signals)} alerts: {len(text_alerts)}")
 
-    write_run_marker(signals, text_alerts, top3)
+    write_run_marker(signals, text_alerts, top5m, top15m)
 
     if not text_alerts:
         return
@@ -452,10 +483,11 @@ def main() -> None:
 def write_run_marker(
     signals: list[dict[str, Any]],
     text_alerts: list[str],
-    top3: list[str],
+    top5m: str,
+    top15m: str,
 ) -> None:
     """在 GitHub Actions 列表行打可见标记。
-    - signal 数 = 过阈值且不在 dedup 窗口内的标的（含被币安过滤的）
+    - signal 数 = 5m / 15m 任一过阈值且不在 dedup 窗口内的标的（含被币安过滤的）
     - alert  数 = signal 中通过币安过滤、最终会推送的告警
     用 ::notice 让列表行右侧出现蓝色 ℹ️ 标记；step summary 给详情页明细。
     """
@@ -466,9 +498,8 @@ def write_run_marker(
         title = f"信号 {n_signals} → 告警 {n_alerts}"
         details = ", ".join(
             (
-                f"{s['pair']} {s['chg5']:+.2f}%"
-                if s["passed"]
-                else f"{s['pair']} {s['chg5']:+.2f}% [过滤：{s['reason']}]"
+                f"{s['pair']} 5m {s['chg5']:+.2f}% / 15m {s['chg15']:+.2f}%"
+                + ("" if s["passed"] else f" [过滤：{s['reason']}]")
             )
             for s in signals
         )
@@ -481,15 +512,19 @@ def write_run_marker(
         with open(summary_path, "a", encoding="utf-8") as f:
             if n_signals > 0:
                 f.write(f"## 信号 {n_signals} → 告警 {n_alerts}\n\n")
-                f.write("| 标的 | 5m 变动 | 状态 |\n")
-                f.write("| --- | --- | --- |\n")
+                f.write("| 标的 | 5m 变动 | 15m 变动 | 状态 |\n")
+                f.write("| --- | --- | --- | --- |\n")
                 for s in signals:
                     status = "通过" if s["passed"] else f"过滤：{s['reason']}"
-                    f.write(f"| `{s['pair']}` | {s['chg5']:+.2f}% | {status} |\n")
+                    f.write(
+                        f"| `{s['pair']}` | {s['chg5']:+.2f}% | "
+                        f"{s['chg15']:+.2f}% | {status} |\n"
+                    )
                 f.write("\n")
             else:
                 f.write("## 本轮无满足阈值的信号\n\n")
-            f.write(f"Top3 OI 5m 变动：{' ｜ '.join(top3)}\n")
+            f.write(f"Top3 by 5m：{top5m}\n\n")
+            f.write(f"Top3 by 15m：{top15m}\n")
     except OSError as exc:
         print(f"[oi_monitor] 写入 step summary 失败：{exc}")
 
