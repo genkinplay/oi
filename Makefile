@@ -4,7 +4,7 @@ ZIP    = probe-lambda.zip
 SAM_DIR = aws-lambda
 
 .PHONY: probe probe-zip oi run-bian \
-        aws-deploy aws-deploy-guided aws-invoke aws-logs aws-status aws-destroy
+        aws-deploy aws-deploy-guided aws-invoke aws-invoke-summary aws-logs aws-status aws-destroy
 
 # 本地跑探测脚本，看本机出站对项目所有外部地址的可达性
 probe:
@@ -37,7 +37,7 @@ aws-deploy-guided:
 aws-deploy:
 	cd $(SAM_DIR) && sam build && sam deploy
 
-# 立即手动触发一次（不等 cron）
+# 立即手动触发一次主流程（不等 cron）
 aws-invoke:
 	aws lambda invoke \
 	  --function-name oi-monitor \
@@ -45,6 +45,15 @@ aws-invoke:
 	  --cli-binary-format raw-in-base64-out \
 	  /tmp/oi-monitor-out.json && \
 	  cat /tmp/oi-monitor-out.json && echo
+
+# 立即手动触发一次 24h 复盘统计
+aws-invoke-summary:
+	aws lambda invoke \
+	  --function-name oi-monitor \
+	  --payload '{"action":"summary"}' \
+	  --cli-binary-format raw-in-base64-out \
+	  /tmp/oi-monitor-summary.json && \
+	  cat /tmp/oi-monitor-summary.json && echo
 
 # 实时尾随 CloudWatch Logs
 aws-logs:

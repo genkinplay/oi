@@ -14,6 +14,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import alerts
 import binance_market as bm
 import indicators as ind
 from ai_analyzer import analyze as ai_analyze
@@ -137,7 +138,7 @@ def run_once() -> dict[str, Any]:
         is_delisted = base in delisted
         text, md = _build_base_alert(pair, chg5, chg15, it.price, is_delisted)
 
-        # 即将下架的不参与 AI 判断
+        ai_with_intervene: dict | None = None  # 用于写 alerts 历史
         if not is_delisted:
             snap = _build_market_snapshot(pair, chg5, chg15)
             ai = ai_analyze(snap)
@@ -145,10 +146,30 @@ def run_once() -> dict[str, Any]:
                 ai_text, ai_md = _format_suggestion(ai)
                 text += "\n" + ai_text
                 md += "\n> \n" + ai_md
+                if ai.get("intervene"):
+                    ai_with_intervene = ai
 
         text_alerts.append(text)
         md_alerts.append(md)
         dedup_upsert(base)
+
+        # 写入 alerts 历史（24h 复盘统计用）。仅当 AI 给了明确介入方向才记录。
+        if ai_with_intervene:
+            direction = ai_with_intervene.get("direction") or ""
+            entry_raw = ai_with_intervene.get("entry_price")
+            try:
+                entry_price = float(entry_raw) if entry_raw is not None else float(it.price or 0)
+            except (TypeError, ValueError):
+                entry_price = float(it.price or 0)
+            if direction in ("long", "short") and entry_price > 0:
+                alerts.record(
+                    base=base,
+                    pair=pair,
+                    direction=direction,
+                    entry_price=entry_price,
+                    confidence=int(ai_with_intervene.get("confidence") or 0),
+                    reasoning=(ai_with_intervene.get("reasoning") or "").strip(),
+                )
 
     print(f"[oi_monitor] signals: {len(signals)} alerts: {len(text_alerts)}")
 
