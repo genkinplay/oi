@@ -1,12 +1,6 @@
 {
   "all_contracts": [
     "AIUSDT",
-    "B3USDT",
-    "BOBUSDT",
-    "DAMUSDT",
-    "DEGENUSDT",
-    "IRUSDT",
-    "VINEUSDT",
-    "ZKJUSDT"
+    "VINEUSDT"
   ]
 }
