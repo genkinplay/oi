@@ -32,9 +32,29 @@ _FONT_TAG_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# 飞书卡片 markdown 组件不支持的 markdown 语法，发送前做最小转换
+# 文档：https://open.feishu.cn/document/ukTMukTMukTM/uADOwUjLwgDM14CM4ATN
+_FEISHU_HEADING_RE = re.compile(r"^#{1,6}[ \t]+(.*?)\s*$", re.MULTILINE)
+_FEISHU_QUOTE_RE = re.compile(r"^>[ \t]?", re.MULTILINE)
+_FEISHU_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
+
 
 def _strip_color_tags(md: str) -> str:
     return _FONT_TAG_RE.sub(r"\1", md)
+
+
+def _to_feishu_md(md: str) -> str:
+    """将通用 markdown 转换为飞书卡片 markdown 组件支持的子集：
+    - 标题 `### X` → 粗体 `**X**`
+    - 引用块行首的 `> ` → 剥掉（空 `>` 行变空行作分隔）
+    - 内联代码 `` `x` `` → 直接展示文本 `x`
+    - <font color> 标签剥掉，保留内层文字
+    """
+    md = _strip_color_tags(md)
+    md = _FEISHU_HEADING_RE.sub(r"**\1**", md)
+    md = _FEISHU_QUOTE_RE.sub("", md)
+    md = _FEISHU_INLINE_CODE_RE.sub(r"\1", md)
+    return md
 
 
 def _split_urls(value: str | None) -> list[str]:
@@ -57,8 +77,8 @@ def send_feishu(
 ) -> None:
     """飞书自定义机器人 - interactive 卡片，body 为 markdown。
     title 走卡片 header（plain_text），不重复进 body。
-    飞书 markdown 不渲染 <font color>，发送前剥离避免标签裸露。"""
-    body = _strip_color_tags(markdown)
+    飞书 markdown 组件仅支持子集语法（无 #/>/`），发送前做转换。"""
+    body = _to_feishu_md(markdown)
     card: dict = {
         "config": {"wide_screen_mode": True},
         "elements": [{"tag": "markdown", "content": body}],

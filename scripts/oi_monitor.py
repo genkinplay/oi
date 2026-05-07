@@ -323,7 +323,7 @@ def _fmt_ai_block(ai: dict[str, Any]) -> tuple[str, str]:
         f'> **建议** <font color="{direction_color}">**{direction_cn}**</font>'
         f"（轻仓）｜ 置信度 **{conf}**",
         f"> ",
-        f"> 介入 `{_fmt_price_safe(entry)}`　止损 `{_fmt_price_safe(sl)}`",
+        f"> 介入 `{_fmt_price_safe(entry)}` 止损 `{_fmt_price_safe(sl)}`",
     ]
     if reasoning:
         md_lines.append("> ")
@@ -564,8 +564,8 @@ def write_run_marker(
                 f.write("\n")
             else:
                 f.write("## 本轮无满足阈值的信号\n\n")
-            f.write(f"Top3 by 5m：{top5m}\n\n")
-            f.write(f"Top3 by 15m：{top15m}\n")
+            f.write(f"Top3 by 5m:{top5m}\n\n")
+            f.write(f"Top3 by 15m:{top15m}\n")
     except OSError as exc:
         print(f"[oi_monitor] 写入 step summary 失败：{exc}")
 

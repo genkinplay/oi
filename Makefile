@@ -4,7 +4,7 @@ ZIP    = probe-lambda.zip
 SAM_DIR = aws-lambda
 
 .PHONY: probe probe-zip oi run-bian \
-        aws-deploy aws-deploy-guided aws-invoke aws-invoke-summary aws-logs aws-status aws-destroy
+        redeploy aws-deploy-guided aws-invoke aws-invoke-summary aws-logs aws-logs-check aws-status aws-destroy
 
 # 本地跑探测脚本，看本机出站对项目所有外部地址的可达性
 probe:
@@ -34,7 +34,7 @@ aws-deploy-guided:
 	cd $(SAM_DIR) && sam build && sam deploy --guided
 
 # 增量部署
-aws-deploy:
+redeploy:
 	cd $(SAM_DIR) && sam build && sam deploy
 
 # 立即手动触发一次主流程（不等 cron）
@@ -58,6 +58,11 @@ aws-invoke-summary:
 # 实时尾随 CloudWatch Logs
 aws-logs:
 	cd $(SAM_DIR) && sam logs --stack-name oi-monitor --tail
+
+# 一键体检：扫最近 N 分钟（默认 60）的 Lambda 日志，按调用聚合，
+# 标记发送失败、异常和被 skip 的信号。例：MINUTES=120 make aws-logs-check
+aws-logs-check:
+	$(PY) scripts/check_lambda_logs.py $(MINUTES)
 
 # 查看 stack 的资源
 aws-status:

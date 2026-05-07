@@ -111,16 +111,23 @@ def run_once() -> dict[str, Any]:
                 )
                 continue
 
-        # 币安永续过滤
+        # 币安永续过滤：区分"完全不存在" vs "结算/即将摘牌"，便于排查
         if not bm.is_perpetual_listed(pair):
-            print(f"[oi_monitor] skip {pair}: 币安无此 USDT 永续合约")
+            status = bm.get_listing_status(pair)
+            if status is None:
+                log_msg = f"币安无此 USDT 永续合约"
+                reason = "币安无此 USDT 永续"
+            else:
+                log_msg = f"币安永续状态 {status}（非 TRADING）"
+                reason = f"币安永续 {status}"
+            print(f"[oi_monitor] skip {pair}: {log_msg}")
             signals.append(
                 {
                     "pair": pair,
                     "chg5": chg5,
                     "chg15": chg15,
                     "passed": False,
-                    "reason": "币安无此 USDT 永续",
+                    "reason": reason,
                 }
             )
             continue
@@ -370,7 +377,7 @@ def _format_suggestion(ai: dict) -> tuple[str, str]:
         f'> **建议** <font color="{direction_color}">**{direction_cn}**</font>'
         f"（轻仓）｜ 置信度 **{conf}**",
         "> ",
-        f"> 介入 `{_p(entry)}`　止损 `{_p(sl)}`",
+        f"> 介入 `{_p(entry)}` 止损 `{_p(sl)}`",
     ]
     if reasoning:
         md_lines.extend(["> ", f"> {reasoning}"])

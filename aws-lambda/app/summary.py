@@ -21,6 +21,9 @@ from notifier import dispatch
 
 CST = timezone(timedelta(hours=8))
 
+# 仅统计盈利幅度严格大于该阈值的标的，避免噪音
+MIN_PROFIT_PCT = 2.0
+
 
 def run_summary() -> dict[str, Any]:
     items = list_recent(hours=24)
@@ -59,7 +62,7 @@ def run_summary() -> dict[str, Any]:
             else:
                 continue
 
-            if profit_pct <= 0:
+            if profit_pct <= MIN_PROFIT_PCT:
                 continue
 
             profits.append(
@@ -99,7 +102,7 @@ def run_summary() -> dict[str, Any]:
 
 
 def _fetch_extreme(pair: str, since_ms: int, direction: str) -> tuple[float, int] | None:
-    """从 since_ms 起拉 5m K 线，返回 (极值价, 极值出现的 K 线开盘 ms)。
+    """从 since_ms 起拉 5m K 线，返回 (极值价，极值出现的 K 线开盘 ms)。
     long → 最高价；short → 最低价。"""
     if direction not in ("long", "short"):
         return None
@@ -134,15 +137,18 @@ def _fmt_price(p: float) -> str:
 
 def _format(profits: list[dict], total_signals: int) -> tuple[str, str]:
     if not profits:
-        text = f"24h 复盘：{total_signals} 个信号 / 0 盈利"
+        text = f"24h 复盘：{total_signals} 个信号 / 0 盈利 >{MIN_PROFIT_PCT:g}%"
         md = (
             f"### 24h 信号复盘\n\n"
-            f"24h 共 **{total_signals}** 个信号，目前**没有**标的产生盈利空间。"
+            f"24h 共 **{total_signals}** 个信号，目前**没有**标的盈利幅度超过 "
+            f"**{MIN_PROFIT_PCT:g}%**."
         )
         return text, md
 
     # 纯文本（旧版通用 webhook 用）—— 紧凑一行一个标的
-    text_lines = [f"24h 复盘 {len(profits)}/{total_signals} 盈利"]
+    text_lines = [
+        f"24h 复盘 {len(profits)}/{total_signals} 盈利 >{MIN_PROFIT_PCT:g}%"
+    ]
     for p in profits:
         sig_t = datetime.fromtimestamp(p["ts_ms"] / 1000, CST).strftime("%H:%M")
         peak_t = datetime.fromtimestamp(p["extreme_ts_ms"] / 1000, CST).strftime("%H:%M")
@@ -156,7 +162,8 @@ def _format(profits: list[dict], total_signals: int) -> tuple[str, str]:
     # markdown（钉钉 / 飞书）—— 卡片式：每个标的两行，移动端阅读友好
     md_lines = [
         f"### 24h 信号复盘",
-        f"共 **{total_signals}** 个信号，**{len(profits)}** 个产生盈利空间",
+        f"共 **{total_signals}** 个信号，**{len(profits)}** 个盈利幅度超过 "
+        f"**{MIN_PROFIT_PCT:g}%**",
         "",
         "---",
         "",
@@ -173,7 +180,7 @@ def _format(profits: list[dict], total_signals: int) -> tuple[str, str]:
                 f"**{i}. {p['pair']}** ｜ "
                 f'<font color="{dir_color}">**{dir_cn}**</font> ｜ '
                 f'<font color="red">**+{p["profit_pct"]:.2f}%**</font>',
-                f"> 介入 `{_fmt_price(p['entry'])}` (信号 {sig_t})　→　"
+                f"> 介入 `{_fmt_price(p['entry'])}` (信号 {sig_t}) → "
                 f"{peak_label} `{_fmt_price(p['extreme'])}` ({peak_t})",
                 "",
             ]
@@ -182,7 +189,7 @@ def _format(profits: list[dict], total_signals: int) -> tuple[str, str]:
         [
             "---",
             "",
-            "> 仅统计从信号到当前的最大浮盈空间，仅供回顾参考。",
+            "> 仅统计从信号到当前的最大盈利幅度，仅供回顾参考。",
         ]
     )
     md = "\n".join(md_lines)

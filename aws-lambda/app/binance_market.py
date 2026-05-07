@@ -26,7 +26,8 @@ import json
 import pathlib
 
 # 模块级缓存：exchangeInfo 数据量大（>600 个合约），单次运行内复用
-_LIVE_SYMBOLS: set[str] | None = None
+_LIVE_SYMBOLS: set[str] | None = None  # 仅 TRADING 状态
+_LIVE_SYMBOL_STATUS: dict[str, str] | None = None  # 全部 symbol → status，用于精准诊断
 # 拉 exchangeInfo 失败（如 451 地域屏蔽）后置 True；后续 is_perpetual_listed 改为放行
 _EXCHANGE_INFO_UNAVAILABLE: bool = False
 
@@ -73,27 +74,34 @@ def load_live_symbols() -> set[str]:
     """加载币安 USDT-M 永续合约清单。
     优先实时拉 fapi/exchangeInfo（永远拿最新）；
     GitHub Actions 上 451 屏蔽时，回落到本地 binance_symbols.json。"""
-    global _LIVE_SYMBOLS, _EXCHANGE_INFO_UNAVAILABLE
+    global _LIVE_SYMBOLS, _LIVE_SYMBOL_STATUS, _EXCHANGE_INFO_UNAVAILABLE
     if _LIVE_SYMBOLS is not None:
         return _LIVE_SYMBOLS
 
     # 1) 实时拉
     data = _get("/fapi/v1/exchangeInfo")
     if isinstance(data, dict) and data.get("symbols"):
-        symbols = {
-            s["symbol"]
+        all_status = {
+            s["symbol"]: s.get("status", "")
             for s in data["symbols"]
-            if s.get("status") == "TRADING"
+            if isinstance(s.get("symbol"), str)
         }
+        symbols = {sym for sym, st in all_status.items() if st == "TRADING"}
         if symbols:
-            print(f"[binance] 使用 fapi 实时清单（{len(symbols)} 合约）")
+            print(
+                f"[binance] 使用 fapi 实时清单（{len(symbols)} TRADING / "
+                f"{len(all_status)} 总数）"
+            )
             _LIVE_SYMBOLS = symbols
+            _LIVE_SYMBOL_STATUS = all_status
             return symbols
 
     # 2) 本地兜底
     local = _load_symbols_from_local()
     if local:
         _LIVE_SYMBOLS = local
+        # 本地清单不带 status，统一视为 TRADING
+        _LIVE_SYMBOL_STATUS = {s: "TRADING" for s in local}
         return local
 
     # 3) 都拿不到 → 放行模式，避免大面积误过滤
@@ -105,12 +113,24 @@ def load_live_symbols() -> set[str]:
 
 
 def is_perpetual_listed(symbol: str) -> bool:
-    """该 symbol 是否在币安 USDT-M 永续合约里活跃。
+    """该 symbol 是否在币安 USDT-M 永续合约里活跃（status=TRADING）。
     清单不可用时保守放行（返回 True），避免大量误过滤。"""
     syms = load_live_symbols()
     if _EXCHANGE_INFO_UNAVAILABLE:
         return True
     return symbol.upper() in syms
+
+
+def get_listing_status(symbol: str) -> str | None:
+    """返回币安永续合约的当前状态字符串，用于精准诊断 skip 原因。
+    可能值：'TRADING'、'SETTLING'、'PENDING_TRADING'、'CLOSE' 等。
+    symbol 不存在返回 None；清单不可用时返回 'TRADING' 做保守放行。"""
+    load_live_symbols()
+    if _EXCHANGE_INFO_UNAVAILABLE:
+        return "TRADING"
+    if _LIVE_SYMBOL_STATUS is None:
+        return None
+    return _LIVE_SYMBOL_STATUS.get(symbol.upper())
 
 
 def fetch_24h(symbol: str) -> Optional[dict]:

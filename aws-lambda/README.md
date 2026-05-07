@@ -33,7 +33,7 @@ aws configure set region ap-southeast-1
 make aws-deploy-guided
 
 # 之后增量更新：
-make aws-deploy
+make redeploy
 ```
 
 `--guided` 会逐项问参数。**所有 [...]内是默认值的题，直接 Enter 接受即可**（不要输入 y/n）：
@@ -90,7 +90,7 @@ make aws-destroy
 make aws-deploy-guided
 ```
 
-或者直接改 `samconfig.toml` 的 `parameter_overrides` 然后 `make aws-deploy`。
+或者直接改 `samconfig.toml` 的 `parameter_overrides` 然后 `make redeploy`。
 
 ## 成本估算（免费层内）
 
