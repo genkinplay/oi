@@ -1,0 +1,60 @@
+name: cleanup workflow runs
+
+on:
+  workflow_dispatch:
+    inputs:
+      keep_days:
+        description: "保留最近 N 天的 run（默认 7）"
+        default: "7"
+        required: false
+  schedule:
+    # UTC 11:30 = 北京时间 19:30（错开 clean.yml 的 19:00）
+    - cron: "30 11 * * *"
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: actions-runs-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      KEEP_DAYS: ${{ inputs.keep_days || '1' }}
+      PARALLEL: "8"
+    steps:
+      - name: Delete old workflow runs
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY}"
+          cutoff=$(date -u -d "${KEEP_DAYS} days ago" +%Y-%m-%dT%H:%M:%SZ)
+          echo "🧹 仓库 ${repo}，删除早于 ${cutoff} 的已完成 run（并发 ${PARALLEL}）"
+
+          # 仅删除 status=completed 的 run，避免误删运行中实例
+          gh api --paginate \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${repo}/actions/runs?per_page=100" \
+            --jq ".workflow_runs[] | select(.status == \"completed\") | select(.created_at < \"${cutoff}\") | .id" \
+            > ids.txt
+
+          total=$(wc -l < ids.txt | tr -d ' ')
+          if [ "$total" -eq 0 ]; then
+            echo "✅ 没有需要删除的 run"
+            exit 0
+          fi
+          echo "📋 待删除 ${total} 条"
+
+          # xargs 并发 DELETE，失败也继续（接近 rate limit 时单条失败属正常）
+          : > fail.log
+          xargs -a ids.txt -P "${PARALLEL}" -I {} \
+            sh -c 'gh api -X DELETE "/repos/'"${repo}"'/actions/runs/{}" --silent || echo "fail:{}" >> fail.log' \
+            || true
+
+          fails=$(wc -l < fail.log | tr -d ' ')
+          deleted=$((total - fails))
+          echo "✅ 删除成功：${deleted}，失败：${fails}"
